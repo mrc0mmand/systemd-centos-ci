@@ -1,0 +1,25 @@
+language: bash
+sudo: required
+services: docker
+
+env:
+    - CONT_NAME="centos-7-$RANDOM"
+before_install:
+    - sudo apt-get -y -o Dpkg:Options::="--force-confnew" install docker-ce
+    - docker --version
+    - docker run -v $PWD:/build:rw -w /build --privileged=true
+                 --name $CONT_NAME -dit --net=host centos:7 /sbin/init
+    - sleep 1
+    - docker exec -it $CONT_NAME yum makecache
+    - docker exec -it $CONT_NAME yum -y install git which grubby grub2-common grub2-pc
+    - docker exec -it $CONT_NAME yum -y --exclude selinux-policy\* upgrade
+
+script:
+    - set -e
+    - docker exec -it $CONT_NAME agent/bootstrap.sh
+    - docker restart $CONT_NAME
+    - docker exec -it $CONT_NAME agent/testsuite.sh
+
+after_script:
+    - docker stop $CONT_NAME
+    - docker rm -f $CONT_NAME

@@ -1,0 +1,8 @@
+#!/usr/bin/bash
+# vi:syntax=sh
+
+set -e
+git clone https://github.com/systemd/mkosi
+pushd mkosi
+python3 setup.py install
+popd

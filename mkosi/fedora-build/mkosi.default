@@ -1,0 +1,19 @@
+[Distribution]
+Distribution=fedora
+Release=29
+
+[Output]
+Format=raw_gpt
+Bootable=yes
+
+[Partitions]
+RootSize=5G
+
+[Validation]
+Password=systemd
+
+[Packages]
+WithNetwork=yes
+Packages=arch-install-scripts btrfs-progs debootstrap dosfstools edk2-ovmf
+         e2fsprogs squashfs-tools gnupg python3 tar veritysetup xfsprogs xz
+         zypper sbsigntools git python3 python3-setuptools

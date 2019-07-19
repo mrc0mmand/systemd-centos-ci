@@ -95,6 +95,7 @@ TEST_LIST=(
 # Prepare environment for the systemd-networkd testsuite
 systemctl disable --now dhcpcd dnsmasq
 systemctl reload dbus.service
+cat /usr/share/dbus-1/system.d/org.freedesktop.network1.conf
 
 for t in "${TEST_LIST[@]}"; do
     exectask "${t##*/}" "timeout 45m ./$t"

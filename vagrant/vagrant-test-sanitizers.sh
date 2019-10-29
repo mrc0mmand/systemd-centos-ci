@@ -18,6 +18,7 @@ pushd /build || { echo >&2 "Can't pushd to /build"; exit 1; }
 export ASAN_OPTIONS=strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1
 export UBSAN_OPTIONS=print_stacktrace=1:print_summary=1:halt_on_error=1
 
+if false; then
 _clang_asan_rt_name="$(ldd build/systemd | awk '/libclang_rt.asan/ {print $1; exit}')"
 
 if [[ -n "$_clang_asan_rt_name" ]]; then
@@ -74,6 +75,7 @@ if [[ $NSPAWN_EC -eq 0 ]]; then
         fi
     fi
 fi
+fi
 
 # Prepare environment for the systemd-networkd testsuite
 systemctl disable --now dhcpcd dnsmasq
@@ -83,6 +85,8 @@ systemctl reload dbus.service
 # yet, let's start a DHCP daemon _only_ for the "master" network device to
 # keep it up during the systemd-networkd testsuite
 dhcpcd --reconfigure --persistent --waitip -q eth0
+
+test/test-network/systemd-networkd-tests.py --build-dir=$PWD/build --debug --asan-options=$ASAN_OPTIONS --ubsan-options=$UBSAN_OPTIONS
 
 exectask "systemd-networkd_sanitizers" \
             "test/test-network/systemd-networkd-tests.py --build-dir=$PWD/build --debug --asan-options=$ASAN_OPTIONS --ubsan-options=$UBSAN_OPTIONS" \

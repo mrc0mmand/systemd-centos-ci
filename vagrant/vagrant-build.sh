@@ -71,6 +71,21 @@ if $USING_SANITIZERS; then
     # Skip the reboot/reload when running with sanitizers, as it in most cases
     # causes boot to timeout or die completely
     # Run tests with sanitizers
+    echo "--- HOST MOUNTS ---"
+    mount -l
+    echo "-------------------"
+    echo "--- GUEST MOUNTS ---"
+    vagrant ssh -c "mount -l"
+    echo "--------------------"
+    echo "--- SSH CONFIG ---"
+    vagrant ssh-config
+    echo "------------------"
+    echo "--- EXPORTS ---"
+    cat /etc/exports
+    cat /etc/exports.d/*
+
+    #vagrant ssh -c "sudo rsync -a /build/ /build-native; ls -la /build-native"
+
     vagrant ssh -c "cd /build && sudo $RELATIVE_TEST_DIR/vagrant-test-sanitizers.sh $DISTRO"
     EC=$?
 

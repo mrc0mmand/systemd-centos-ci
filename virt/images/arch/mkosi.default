@@ -1,0 +1,24 @@
+[Distribution]
+Distribution=arch
+
+[Host]
+NetworkVeth=yes
+Ssh=yes
+
+[Output]
+Bootable=yes
+Format=gpt_ext4
+Hostname=archlinux-ci
+KernelCommandLine=console=ttyS0 !quiet systemd.log_level=debug systemd.log_target=console
+WithoutUnifiedKernelImages=yes
+
+[Packages]
+Packages=
+        curl
+        # for `rankmirrors`
+        pacman-contrib
+PrepareScript=arch.sh
+WithNetwork=yes
+
+[Partitions]
+RootSize=32G

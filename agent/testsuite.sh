@@ -92,7 +92,10 @@ FLAKE_LIST=(
     "test/TEST-56-EXIT-TYPE"      # flaky test, see below (systemd/systemd#19345)
     "test/TEST-58-REPART"         # flaky test, see below (yet another instance of systemd/systemd#17469)
 )
-SKIP_LIST=("${FLAKE_LIST[@]}")
+SKIP_LIST=(
+    "test/TEST-57-ONSUCCESS-UPHOLD"
+    "${FLAKE_LIST[@]}"
+)
 
 [[ ! -f /usr/bin/qemu-kvm ]] && ln -s /usr/libexec/qemu-kvm /usr/bin/qemu-kvm
 qemu-kvm --version

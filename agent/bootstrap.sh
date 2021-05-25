@@ -19,12 +19,13 @@ at_exit() {
     exectask "list-of-installed-packages" "rpm -qa"
 }
 
-set -eu
-set -o pipefail
-
 trap at_exit EXIT
 
 # Parse optional script arguments
+# Note: in RHEL7 version of the bootstrap script this is kind of pointless
+#       (since it's parsing only a single option), but it allows us to have
+#       a single interface in agent-control.py for all RHEL versions without
+#       additional hassle
 while getopts "r:" opt; do
     case "$opt" in
         r)
@@ -39,93 +40,60 @@ while getopts "r:" opt; do
     esac
 done
 
-ADDITIONAL_DEPS=(
-    attr
-    bpftool
-    clang
-    device-mapper-event
-    dnsmasq
-    dosfstools
-    e2fsprogs
-    elfutils
-    elfutils-devel
-    gcc-c++
-    iproute-tc
-    kernel-modules-extra
-    libasan
-    libfdisk-devel
-    libpwquality-devel
-    libzstd-devel
-    llvm
-    make
-    net-tools
-    nmap-ncat
-    openssl-devel
-    pcre2-devel
-    python3-jinja2
-    qemu-kvm
-    qrencode-devel
-    quota
-    rust
-    selinux-policy-devel
-    socat
-    squashfs-tools
-    strace
-    tpm2-tss-devel
-    veritysetup
-    wget
-)
+# All commands from this script are fundamental, ensure they all pass
+# before continuing (or die trying)
+set -e -u
+set -o pipefail
 
-dnf -y install epel-release dnf-plugins-core gdb
-dnf -y config-manager --enable epel --enable powertools
-# Local mirror of https://copr.fedorainfracloud.org/coprs/mrc0mmand/systemd-centos-ci-centos8/
-dnf -y config-manager --add-repo "http://artifacts.ci.centos.org/systemd/repos/mrc0mmand-systemd-centos-ci-centos8-epel8/mrc0mmand-systemd-centos-ci-centos8-epel8.repo"
-dnf -y update
-dnf -y builddep systemd
-dnf -y install "${ADDITIONAL_DEPS[@]}"
-# As busybox is not shipped in RHEL 8/CentOS 8 anymore, we need to get it
-# using a different way. Needed by TEST-13-NSPAWN-SMOKE
-wget -O /usr/bin/busybox https://www.busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-x86_64 && chmod +x /usr/bin/busybox
-# Use the Nmap's version of nc, since TEST-13-NSPAWN-SMOKE doesn't seem to work
-# with the OpenBSD version present on CentOS 8
-if alternatives --display nmap; then
-    alternatives --set nmap /usr/bin/ncat
-    alternatives --display nmap
+COPR_REPO="https://copr.fedorainfracloud.org/coprs/mrc0mmand/systemd-centos-ci/repo/epel-7/mrc0mmand-systemd-centos-ci-epel-7.repo"
+COPR_REPO_PATH="/etc/yum.repos.d/${COPR_REPO##*/}"
+
+# Enable necessary repositories and install required packages
+#   - enable custom Copr repo with newer versions of certain packages (necessary
+#     to successfully compile upstream systemd on CentOS)
+#   - enable EPEL repo for additional dependencies
+#   - update current system
+#   - install python 3.6 (required by meson) and install meson + other build deps
+curl "$COPR_REPO" -o "$COPR_REPO_PATH"
+# Add a copr repo mirror
+# Note: if a URL starts on a new line, it MUST begin with leading spaces,
+#       otherwise it will be ignored
+sed -i '/baseurl=/a\    http://artifacts.ci.centos.org/systemd/mrc0mmand-systemd-centos-ci/' "$COPR_REPO_PATH"
+sed -i '/gpgkey=/d' "$COPR_REPO_PATH"
+sed -i 's/skip_if_unavailable=True/skip_if_unavailable=False/' "$COPR_REPO_PATH"
+# As the gpgkey directive doesn't support mirrors, let's install the GPG key manually
+if ! rpm --import https://copr-be.cloud.fedoraproject.org/results/mrc0mmand/systemd-centos-ci/pubkey.gpg; then
+    rpm --import http://artifacts.ci.centos.org/systemd/mrc0mmand-systemd-centos-ci/pubkey.gpg
 fi
+yum -y install epel-release yum-utils gdb
+yum-config-manager --enable epel
+yum -y update
+yum -y install attr busybox dnsmasq dosfstools e2fsprogs gcc-c++ libasan libbpf-devel libfdisk-devel nc net-tools \
+               ninja-build openssl-devel pcre2-devel python36 python-lxml qemu-kvm quota socat squashfs-tools strace \
+               systemd-ci-environment veritysetup
 
-dnf -y builddep kernel
-# Downgrade gcc
-dnf -y copr enable mrc0mmand/centos8-kernel-debug
-dnf -y --allowerasing install gcc-4.9.2
-# Kernel build
-KERNEL_VER="3.10"
-git clone git://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux-2.6.git upstream-kernel
-pushd upstream-kernel
-git checkout "v$KERNEL_VER"
-#git cherry-pick --no-edit cb984d101b30eb7478d32df56a0023e4603cba7f
-make defconfig
-cp "/boot/config-$(uname -r)" .config-local
-# Get the SB cert (CONFIG_MODULE_SIG_KEY=certs/rhel.pem)
-dnf download --source kernel
-rpm -i kernel*.src.rpm
-[[ ! -d certs ]] && mkdir certs
-cp -v /root/rpmbuild/SOURCES/centos.pem certs/rhel.pem
-sed -i 's/CONFIG_IOSCHED_BFQ=y/CONFIG_IOSCHED_BFQ=n/' .config-local
-./scripts/kconfig/merge_config.sh .config .config-local
-make -j16
-make modules_install
-cp -v arch/x86_64/boot/bzImage /boot/vmlinuz-"$KERNEL_VER"
-chmod +x /boot/vmlinuz-"$KERNEL_VER"
-cp -v System.map /boot/System.map-"$KERNEL_VER"
-dracut --kver "$(file /boot/vmlinuz-"$KERNEL_VER" | sed -r 's/^.+version ([^ ]+) .+$/\1/')" -f /boot/initramfs-"$KERNEL_VER".img
-sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=30/' /etc/default/grub
-grub2-mkconfig -o /boot/grub2/grub.cfg
-grubby --make-default --copy-default --add-kernel=/boot/vmlinuz-"$KERNEL_VER" --initrd=/boot/initramfs-"$KERNEL_VER".img --title="Upstream $KERNEL_VER"
-popd
+# Since systemd/systemd#13842 the minimal meson version was bumped to 0.52.1,
+# which is no longer available in the CentOS 7 repos
+python3.6 -m ensurepip
+python3.6 -m pip install meson==0.52.1
+python3.6 -m pip install jinja2
 
+# python36 package doesn't create the python3 symlink
+rm -f /usr/bin/python3
+ln -s "$(which python3.6)" /usr/bin/python3
 
-dnf -y upgrade gcc
-dnf -y builddep systemd
+# Build and install dracut from upstream
+(
+    test -e dracut && rm -rf dracut
+    git clone git://git.kernel.org/pub/scm/boot/dracut/dracut.git
+    pushd dracut || { echo >&2 "Can't pushd to dracut"; exit 1; }
+    git checkout 046
+    ./configure --disable-documentation
+    make -j "$(nproc)"
+    make install
+    popd
+) 2>&1 | tee "$LOGDIR/dracut-build.log"
+
 # Fetch the upstream systemd repo
 test -e systemd && rm -rf systemd
 git clone "$REPO_URL" systemd
@@ -135,31 +103,13 @@ git_checkout_pr "$REMOTE_REF"
 
 # It's impossible to keep the local SELinux policy database up-to-date with
 # arbitrary pull request branches we're testing against.
-# Set SELinux to permissive on the test hosts to avoid false positives, but
-# to still allow running tests which require SELinux.
+# Disable SELinux on the test hosts and avoid false positives.
 if setenforce 0; then
-    echo SELINUX=permissive >/etc/selinux/config
+    echo SELINUX=disabled >/etc/selinux/config
 fi
 
 # Disable firewalld (needed for systemd-networkd tests)
 systemctl disable firewalld
-
-# Enable systemd-coredump
-if ! coredumpctl_init; then
-    echo >&2 "Failed to configure systemd-coredump/coredumpctl"
-    exit 1
-fi
-
-# Compile & install libbpf-next
-(
-    git clone --depth=1 https://github.com/libbpf/libbpf libbpf
-    pushd libbpf/src
-    LD_FLAGS="-Wl,--no-as-needed" NO_PKG_CONFIG=1 make
-    make install
-    ldconfig
-    popd
-    rm -fr libbpf
-)
 
 # Compile systemd
 #   - slow-tests=true: enables slow tests
@@ -173,7 +123,8 @@ fi
     meson build -Dc_args='-fno-omit-frame-pointer -ftrapv -Og' \
                 -Dcpp_args='-Og' \
                 -Ddebug=true \
-                -Dlog-trace=true \
+                --werror \
+                -Dhomed=false \
                 -Dslow-tests=true \
                 -Dfuzz-tests=true \
                 -Dtests=unsafe \
@@ -182,8 +133,7 @@ fi
                 -Dnobody-user=nfsnobody \
                 -Dnobody-group=nfsnobody \
                 -Dman=false \
-                -Dhtml=false \
-                -Ddefault-hierarchy=legacy
+                -Dhtml=false
     ninja-build -C build
 ) 2>&1 | tee "$LOGDIR/build.log"
 
@@ -194,13 +144,37 @@ ninja-build -C build install
 # This is necessary, since at least once we got into a situation where
 # the old systemd binary was incompatible with the unit files on disk and
 # prevented the system from reboot
+systemd-analyze set-log-level debug
 SYSTEMD_LOG_LEVEL=debug systemctl daemon-reexec
-SYSTEMD_LOG_LEVEL=debug systemctl --user daemon-reexec
+
+# Readahead is dead in systemd upstream
+rm -f /usr/lib/systemd/system/systemd-readahead-done.service
+popd
 
 # The systemd testsuite uses the ext4 filesystem for QEMU virtual machines.
 # However, the ext4 module is not included in initramfs by default, because
 # CentOS uses xfs as the default filesystem
-dracut -f --regenerate-all --filesystems ext4
+# Also, install the new udev rules introduced in systemd/systemd#7594 explicitly
+# until dracut's udev module is updated
+INSTALL_FILES=()
+REQUESTED_FILES=(
+    /usr/lib/udev/rules.d/53-storage-hardware.rules
+    /usr/lib/udev/rules.d/56-fallback-scsi_id.rules
+    /usr/lib/udev/rules.d/59-storage-content.rules
+)
+# To get rid of the (although bening but ugly) dracut's error message about
+# non-existent files, let's first check out if the files we're trying to install
+# into the initrd indeed exist
+for rfile in "${REQUESTED_FILES[@]}"; do
+    if [[ -f $rfile ]]; then
+        INSTALL_FILES+=(--install "$rfile")
+    fi
+done
+
+# A particularly ugly workaround for older versions of bash which treat empty
+# array as an unset variable, thus tripping over `set -u` used above.
+# The ${param+expr} expression expands `expr` only if `param` is set.
+dracut -f --regenerate-all --filesystems ext4 ${INSTALL_FILES[@]+"${INSTALL_FILES[@]}"}
 
 # Check if the new dracut image contains the systemd module to avoid issues
 # like systemd/systemd#11330
@@ -227,20 +201,15 @@ GRUBBY_ARGS=(
     # persist across reboots without this kludge and can (actually it does)
     # interfere with running tests
     "systemd.clock_usec=$(($(date +%s%N) / 1000 + 1))"
-    #"crashkernel=192M"
 )
-grubby --args="${GRUBBY_ARGS[*]} debug" --update-kernel="$(grubby --default-kernel)"
+grubby --args="${GRUBBY_ARGS[*]}" --update-kernel="$(grubby --default-kernel)"
 # Check if the $GRUBBY_ARGS were applied correctly
 for arg in "${GRUBBY_ARGS[@]}"; do
-    if ! grep -q -r "$arg" /boot/loader/entries/; then
-        echo >&2 "Kernel parameter '$arg' was not found in /boot/loader/entries/*.conf"
+    if ! grep -q "$arg" /boot/grub2/grub.cfg; then
+        echo >&2 "Kernel parameter '$arg' was not found in /boot/grub2/grub.cfg"
         exit 1
     fi
 done
-
-# coredumpctl_collect takes an optional argument, which upsets shellcheck
-# shellcheck disable=SC2119
-coredumpctl_collect
 
 # Let's leave this here for a while for debugging purposes
 echo "Current date:         $(date)"
@@ -250,25 +219,11 @@ echo "/etc/.updated mtime:  $(date -r /etc/.updated)"
 
 echo "user.max_user_namespaces=10000" >> /etc/sysctl.conf
 
-# Reboot the machine on kernel panic
-echo 'kernel.panic = 3' >/etc/sysctl.d/99-reboot-on-panic.conf
-sysctl --system
-sysctl kernel.panic
-systemctl enable kdump
-
-# Configure a custom kernel
-# RHEL 8.0 (kernel-4.18.0-80.el8)
-#dnf -y config-manager --add-repo http://vault.centos.org/8.0.1905/BaseOS/x86_64/os
-#dnf -y install kernel-4.18.0-80.11.2.el8_0
-#grubby --set-default /boot/vmlinuz-4.18.0-80.11.2.el8_0.x86_64
-# RHEL 8.1 (kernel-4.18.0-147.el8)
-#dnf -y config-manager --add-repo https://vault.centos.org/8.1.1911/BaseOS/x86_64/os
-#dnf -y install kernel-0:4.18.0-147.8.1.el8_1
-#grubby --set-default /boot/vmlinuz-4.18.0-147.8.1.el8_1.x86_64
+dmesg
 
 echo "-----------------------------"
 echo "- REBOOT THE MACHINE BEFORE -"
 echo "-         CONTINUING        -"
 echo "-----------------------------"
 
-exit 255
+sync

@@ -87,7 +87,7 @@ ln -s "$(which python3.6)" /usr/bin/python3
     test -e dracut && rm -rf dracut
     git clone git://git.kernel.org/pub/scm/boot/dracut/dracut.git
     pushd dracut || { echo >&2 "Can't pushd to dracut"; exit 1; }
-    git checkout 046
+    #git checkout 048
     ./configure --disable-documentation
     make -j "$(nproc)"
     make install
@@ -110,6 +110,27 @@ fi
 
 # Disable firewalld (needed for systemd-networkd tests)
 systemctl disable firewalld
+
+yum-builddep -y kernel
+# Kernel build
+KERNEL_VER="3.10"
+git clone git://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux-2.6.git upstream-kernel
+pushd upstream-kernel
+git checkout "v$KERNEL_VER"
+make olddefconfig
+#make defconfig
+#cp "/boot/config-$(uname -r)" .config-local
+#./scripts/kconfig/merge_config.sh .config .config-local
+make -j16
+make modules_install
+KERNEL_VER_FULL="$(file -L arch/x86_64/boot/bzImage | sed -r 's/^.+version ([^ ]+) .+$/\1/')"
+cp -Lv arch/x86_64/boot/bzImage /boot/vmlinuz-"$KERNEL_VER_FULL"
+chmod +x /boot/vmlinuz-"$KERNEL_VER_FULL"
+cp -Lv System.map /boot/System.map-"$KERNEL_VER_FULL"
+dracut --kver "$KERNEL_VER_FULL" -f /boot/initramfs-"$KERNEL_VER_FULL".img
+grubby --make-default --copy-default --add-kernel=/boot/vmlinuz-"$KERNEL_VER_FULL" --initrd=/boot/initramfs-"$KERNEL_VER_FULL".img --title="Upstream $KERNEL_VER_FULL"
+popd
+
 
 # Compile systemd
 #   - slow-tests=true: enables slow tests
@@ -136,6 +157,8 @@ systemctl disable firewalld
                 -Dhtml=false
     ninja-build -C build
 ) 2>&1 | tee "$LOGDIR/build.log"
+
+exit 255
 
 # Install the compiled systemd
 ninja-build -C build install
@@ -201,6 +224,8 @@ GRUBBY_ARGS=(
     # persist across reboots without this kludge and can (actually it does)
     # interfere with running tests
     "systemd.clock_usec=$(($(date +%s%N) / 1000 + 1))"
+    "crashkernel=192M"
+    "panic=10"
 )
 grubby --args="${GRUBBY_ARGS[*]}" --update-kernel="$(grubby --default-kernel)"
 # Check if the $GRUBBY_ARGS were applied correctly
@@ -225,5 +250,3 @@ echo "-----------------------------"
 echo "- REBOOT THE MACHINE BEFORE -"
 echo "-         CONTINUING        -"
 echo "-----------------------------"
-
-sync

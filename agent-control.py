@@ -335,7 +335,7 @@ class AgentControl(object):
         time.sleep(30)
 
         ping_command = ["/usr/bin/ping", "-q", "-c", "1", "-W", "10", node]
-        for i in range(10):
+        for i in range(20):
             logging.info("Checking if the node {} is alive (try #{})".format(node, i))
             rc = self.execute_local_command(ping_command)
             if rc == 0:
